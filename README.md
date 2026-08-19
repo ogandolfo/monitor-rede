@@ -18,6 +18,7 @@ Execute o comando do Streamlit:
 
 ```bash
 streamlit run monitor_v25.py
+```
 
 ---
 ## 🚀 Funcionalidades
