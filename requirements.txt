@@ -1,0 +1,7 @@
+streamlit
+pandas
+requests
+paramiko
+python-dotenv
+streamlit-autorefresh
+urllib3
