@@ -47,8 +47,8 @@ st.markdown("""
 
 st.title("🌐 Monitor de Rede & Latência (v25)")
 
-# Auto-refresh global de 15s ativado constantemente
-st_autorefresh(interval=15000, limit=None, key="global_autorefresh")
+# Auto-refresh global de 5s ativado constantemente
+st_autorefresh(interval=5000, limit=None, key="global_autorefresh")
 
 # ----------------------------------------------------
 # 1. FUNÇÕES DE SUPORTE E REDE
@@ -294,8 +294,8 @@ with tab1:
         st.session_state.ping_history = pd.DataFrame(columns=["Horário"] + [t["name"] for t in dns_targets])
         st.session_state.ping_loss_history = pd.DataFrame(columns=["Horário"] + [t["name"] for t in dns_targets])
 
-    st.session_state.ping_history = pd.concat([st.session_state.ping_history, pd.DataFrame([new_entry_lat])], ignore_index=True).tail(120)
-    st.session_state.ping_loss_history = pd.concat([st.session_state.ping_loss_history, pd.DataFrame([new_entry_loss])], ignore_index=True).tail(120)
+    st.session_state.ping_history = pd.concat([st.session_state.ping_history, pd.DataFrame([new_entry_lat])], ignore_index=True).tail(360)
+    st.session_state.ping_loss_history = pd.concat([st.session_state.ping_loss_history, pd.DataFrame([new_entry_loss])], ignore_index=True).tail(360)
 
     col_g1, col_g2 = st.columns(2)
     with col_g1:
@@ -371,8 +371,8 @@ with tab2:
         st.session_state.services_history = pd.DataFrame(columns=["Horário"] + [s["name"] for s in services_list])
         st.session_state.services_loss_history = pd.DataFrame(columns=["Horário"] + [s["name"] for s in services_list])
 
-    st.session_state.services_history = pd.concat([st.session_state.services_history, pd.DataFrame([new_srv_lat])], ignore_index=True).tail(120)
-    st.session_state.services_loss_history = pd.concat([st.session_state.services_loss_history, pd.DataFrame([new_srv_loss])], ignore_index=True).tail(120)
+    st.session_state.services_history = pd.concat([st.session_state.services_history, pd.DataFrame([new_srv_lat])], ignore_index=True).tail(360)
+    st.session_state.services_loss_history = pd.concat([st.session_state.services_loss_history, pd.DataFrame([new_srv_loss])], ignore_index=True).tail(360)
 
     col_sg1, col_sg2 = st.columns(2)
     with col_sg1:
