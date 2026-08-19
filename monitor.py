@@ -19,7 +19,7 @@ load_dotenv()
 # Desabilita avisos de SSL não verificado para testes HTTPS brutos
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="Monitor de Rede - Windows v25", layout="wide", page_icon="🌐")
+st.set_page_config(page_title="Monitor de Rede - Windows", layout="wide", page_icon="🌐")
 
 st.markdown("""
     <style>

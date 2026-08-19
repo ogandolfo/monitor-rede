@@ -47,6 +47,6 @@ Dê um duplo clique no arquivo `executar.bat` (ou o nome que deu ao seu arquivo 
 Execute o comando do Streamlit:
 
 ```bash
-streamlit run monitor_v25.py
+streamlit run monitor.py
 ```
 ---
