@@ -1,4 +1,4 @@
-# 🌐 Monitor de Rede & Latência (v25)
+# 🌐 Monitor de Rede & Latência
 
 Aplicação interativa em Python utilizando **Streamlit** para monitoramento em tempo real de conexões de rede, disponibilidade de serviços web e telemetria de hardware via SSH.
 
