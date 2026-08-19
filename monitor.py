@@ -238,7 +238,7 @@ tab1, tab2, tab3 = st.tabs([
 # ABA 1: ICMP / Ping Externa em DNS Públicos
 # ====================================================
 with tab1:
-    st.subheader("⚡ Monitoramento de Latência DNS públicos (15s)")
+    st.subheader("⚡ Monitoramento de Latência DNS públicos (5s)")
     gateway_ip = os.getenv("ONT_IP", "192.168.1.1")
     
     dns_targets = [
@@ -309,7 +309,7 @@ with tab1:
 # ABA 2: Checagem Completa de Serviços Web
 # ====================================================
 with tab2:
-    st.subheader("🌐 Disponibilidade & Latência HTTP: Web, Redes, Streaming & Games (15s)")
+    st.subheader("🌐 Disponibilidade & Latência HTTP: Web, Redes, Streaming & Games (5s)")
 
     services_list = [
         {"name": "Serasa Consumidor", "url": "https://www.serasa.com.br", "icon": "💳"},
