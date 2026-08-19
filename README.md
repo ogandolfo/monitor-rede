@@ -34,6 +34,7 @@ __pycache__/
 venv/
 .venv/
 ```
+---
 
 ## 🏃‍♂️ Como Executar
 
