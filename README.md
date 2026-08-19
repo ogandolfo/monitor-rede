@@ -6,21 +6,6 @@ Aplicação interativa em Python utilizando **Streamlit** para monitoramento em 
 
 ---
 
-## 🏃‍♂️ Como Executar
-
-Você pode executar a aplicação de duas formas no Windows:
-
-### Opção 1: Via arquivo executável (.bat)
-Dê um duplo clique no arquivo `executar.bat` (ou o nome que deu ao seu arquivo `.bat`) na raiz do projeto.
-
-### Opção 2: Via Terminal
-Execute o comando do Streamlit:
-
-```bash
-streamlit run monitor_v25.py
-```
-
----
 ## 🚀 Funcionalidades
 
 * **⚡ Latência Externa & DNS Públicos:** Monitoramento contínuo de latência (ms) e perda de pacotes (%) em servidores DNS e Gateway local, com histórico dos últimos 30 minutos.
@@ -48,3 +33,19 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+```
+
+## 🏃‍♂️ Como Executar
+
+Você pode executar a aplicação de duas formas no Windows:
+
+### Opção 1: Via arquivo executável (.bat)
+Dê um duplo clique no arquivo `executar.bat` (ou o nome que deu ao seu arquivo `.bat`) na raiz do projeto.
+
+### Opção 2: Via Terminal
+Execute o comando do Streamlit:
+
+```bash
+streamlit run monitor_v25.py
+```
+---
