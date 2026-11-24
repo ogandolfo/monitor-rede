@@ -1,335 +1,26 @@
 """Monitor de Rede & Latência — dashboard Streamlit (Windows).
 
-A coleta (ping, HTTP e SSH) roda em threads de fundo compartilhadas por todas
-as abas do navegador; a interface apenas lê o estado e se redesenha a cada 5s.
+A coleta roda em segundo plano (pacote `netmon`), grava o histórico em
+data/netmon.db e detecta quedas. Esta página apenas lê e desenha.
 """
 import datetime as dt
 import html
-import os
-import re
-import subprocess
-import threading
 import time
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 
 import altair as alt
 import pandas as pd
-import paramiko
-import requests
 import streamlit as st
-import urllib3
-from dotenv import load_dotenv
 
-load_dotenv()
+from netmon import config as cfg
+from netmon import credentials
+from netmon.collector import AlreadyRunning, get_global_collector
+from netmon.incidents import KIND_ICONS, KIND_MONITOR_OFF, OUTAGE_KINDS
 
-# Alguns serviços são testados sem validar o certificado (só interessa a disponibilidade)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# ----------------------------------------------------
-# CONFIGURAÇÃO
-# ----------------------------------------------------
-PROBE_INTERVAL_S = 5          # ping + HTTP
-SSH_INTERVAL_S = 120          # métricas da ONT
-HISTORY_POINTS = 360          # 360 x 5s = 30 min
-SSH_HISTORY_POINTS = 30       # 30 x 120s = 1 h
-
-GATEWAY_IP = os.getenv("ONT_IP", "192.168.1.1")
-
-DNS_TARGETS = [
-    {"name": "Cloudflare Pri.", "ip": "1.1.1.1", "icon": "⚡"},
-    {"name": "Google DNS Pri.", "ip": "8.8.8.8", "icon": "🌐"},
-    {"name": "Quad9 Primary", "ip": "9.9.9.9", "icon": "🛡️"},
-    {"name": "OpenDNS Pri.", "ip": "208.67.222.222", "icon": "🔓"},
-    {"name": "AdGuard DNS", "ip": "94.140.14.14", "icon": "🛡️"},
-    {"name": "Cloudflare Sec.", "ip": "1.0.0.1", "icon": "⚡"},
-    {"name": "Google DNS Sec.", "ip": "8.8.4.4", "icon": "🌐"},
-    {"name": "Quad9 Secondary", "ip": "149.112.112.112", "icon": "🛡️"},
-    {"name": "OpenDNS Sec.", "ip": "208.67.220.220", "icon": "🔓"},
-    {"name": "Gateway", "ip": GATEWAY_IP, "icon": "🖧"},
-]
-
-SERVICES = [
-    {"name": "Serasa Consumidor", "url": "https://www.serasa.com.br", "icon": "💳"},
-    {"name": "Serasa Experian", "url": "https://www.serasaexperian.com.br", "icon": "🏢"},
-    {"name": "WhatsApp Web", "url": "https://www.whatsapp.com", "icon": "💬"},
-    {"name": "Instagram", "url": "https://www.instagram.com", "icon": "📸"},
-    {"name": "Twitter / X", "url": "https://x.com", "icon": "🐦"},
-    {"name": "Facebook CDN", "url": "https://www.facebook.com", "icon": "📘"},
-    {"name": "TikTok", "url": "https://www.tiktok.com", "icon": "🎵"},
-    {"name": "Reddit", "url": "https://www.reddit.com", "icon": "🤖"},
-    {"name": "Discord API", "url": "https://discord.com", "icon": "💬"},
-    {"name": "Netflix CDN", "url": "https://assets.nflxext.com", "icon": "🍿"},
-    {"name": "Prime Video", "url": "https://www.primevideo.com", "icon": "🎬"},
-    {"name": "Disney+", "url": "https://www.disneyplus.com", "icon": "🏰"},
-    {"name": "Max (HBO)", "url": "https://auth.max.com", "icon": "🎭"},
-    {"name": "YouTube Video", "url": "https://www.youtube.com/generate_204", "icon": "▶️"},
-    {"name": "Twitch Stream", "url": "https://www.twitch.tv", "icon": "🟣"},
-    {"name": "Spotify Web", "url": "https://open.spotify.com", "icon": "🟢"},
-    {"name": "League of Legends", "url": "https://br1.api.riotgames.com/lol/status/v4/platform-data", "icon": "⚔️"},
-    {"name": "Steam Web API", "url": "https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v0001/", "icon": "🎮"},
-    {"name": "Xbox Live API", "url": "https://www.xbox.com", "icon": "🟢"},
-    {"name": "PlayStation Network", "url": "https://auth.api.sonyentertainmentnetwork.com", "icon": "🔷"},
-]
-
-HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-}
-
-# ----------------------------------------------------
-# 1. SONDAS DE REDE
-# ----------------------------------------------------
-_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-:]*$")
-# Uma resposta de eco válida sempre traz "TTL=<n>" (pt-BR e en-US). Mensagens como
-# "Host de destino inacessível" ou "TTL expirado" não trazem, então contam como perda.
-_REPLY_RE = re.compile(r"TTL=\d+", re.IGNORECASE)
-_TIME_RE = re.compile(r"(?:tempo|time)\s*([=<])\s*(\d+)\s*ms", re.IGNORECASE)
-
-
-def ping_host(host, count=3, timeout_ms=1000):
-    """Retorna (latência média em ms | None, perda em %)."""
-    if not host or not _HOST_RE.match(host):
-        return None, 100
-    try:
-        proc = subprocess.run(
-            ["ping", "-n", str(count), "-w", str(timeout_ms), host],
-            capture_output=True,
-            timeout=count * (timeout_ms / 1000 + 1) + 5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (subprocess.SubprocessError, OSError):
-        return None, 100
-
-    # Só nos interessam trechos ASCII, então a página de código do console não importa
-    output = proc.stdout.decode("latin-1", errors="ignore")
-    times = []
-    replies = 0
-    for line in output.splitlines():
-        if not _REPLY_RE.search(line):
-            continue
-        replies += 1
-        m = _TIME_RE.search(line)
-        if m:
-            value = float(m.group(2))
-            times.append(value / 2 if m.group(1) == "<" else value)  # "<1ms" ≈ 0,5 ms
-
-    loss = round((count - min(replies, count)) * 100 / count)
-    latency = round(sum(times) / len(times), 1) if times else None
-    return latency, loss
-
-
-def check_service(url):
-    """Retorna (tempo até a resposta em ms | None, ok, detalhe)."""
-    try:
-        start = time.perf_counter()
-        # stream=True: mede até os cabeçalhos chegarem, sem baixar a página inteira
-        with requests.get(url, timeout=(3, 4), headers=HTTP_HEADERS,
-                          allow_redirects=True, verify=False, stream=True) as resp:
-            elapsed = round((time.perf_counter() - start) * 1000, 1)
-            if resp.status_code < 500:
-                return elapsed, True, f"HTTP {resp.status_code}"
-            return None, False, f"HTTP {resp.status_code}"
-    except requests.Timeout:
-        return None, False, "Timeout"
-    except requests.RequestException:
-        return None, False, "Indisponível"
-
-
-def format_uptime(seconds_float):
-    tot_sec = int(seconds_float)
-    days, rem = divmod(tot_sec, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, seconds = divmod(rem, 60)
-    parts = []
-    if days:
-        parts.append(f"{days}d")
-    if hours or days:
-        parts.append(f"{hours}h")
-    if minutes or hours or days:
-        parts.append(f"{minutes}m")
-    parts.append(f"{seconds}s")
-    return " ".join(parts)
-
-
-def _ssh_run(ssh, cmd, timeout=3.0):
-    _in, out, _err = ssh.exec_command(cmd, timeout=timeout)
-    return out.read().decode(errors="ignore").strip()
-
-
-def fetch_ssh_metrics(ip, username, password, port=22):
-    if not ip or not username or not password:
-        return {"error": "Credenciais SSH não configuradas (ONT_IP / ONT_USER / ONT_PASS no .env)."}
-
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        ssh.connect(ip, port=port, username=username, password=password,
-                    timeout=3.0, banner_timeout=3.0, auth_timeout=5.0,
-                    look_for_keys=False, allow_agent=False)
-
-        # 1. Uptime
-        uptime_clean = "Indisponível"
-        up_out = _ssh_run(ssh, "cat /proc/uptime")
-        if up_out:
-            try:
-                uptime_clean = format_uptime(float(up_out.split()[0]))
-            except ValueError:
-                uptime_clean = " ".join(up_out.split())
-        if uptime_clean == "Indisponível":
-            up_out2 = _ssh_run(ssh, "uptime")
-            if up_out2 and "forbidden" not in up_out2.lower() and "usage" not in up_out2.lower():
-                uptime_clean = up_out2
-
-        # 2. Memória
-        mem_pct = None
-        mem_out = _ssh_run(ssh, "cat /proc/meminfo")
-        m_tot = re.search(r"MemTotal:\s+(\d+)", mem_out)
-        m_free = re.search(r"MemFree:\s+(\d+)", mem_out)
-        if m_tot and m_free and float(m_tot.group(1)) > 0:
-            m_avail = re.search(r"MemAvailable:\s+(\d+)", mem_out)
-            total_kb = float(m_tot.group(1))
-            if m_avail:
-                used_kb = total_kb - float(m_avail.group(1))
-            else:
-                m_buff = re.search(r"Buffers:\s+(\d+)", mem_out)
-                m_cached = re.search(r"^Cached:\s+(\d+)", mem_out, re.MULTILINE)
-                used_kb = total_kb - (float(m_free.group(1))
-                                      + (float(m_buff.group(1)) if m_buff else 0.0)
-                                      + (float(m_cached.group(1)) if m_cached else 0.0))
-                if used_kb < 0:
-                    used_kb = total_kb - float(m_free.group(1))
-            mem_pct = round(used_kb / total_kb * 100, 1)
-
-        # 3. CPU (duas leituras de /proc/stat com 0,5s de intervalo)
-        cpu_pct = None
-        try:
-            c1 = _ssh_run(ssh, "grep '^cpu ' /proc/stat", timeout=2.0)
-            time.sleep(0.5)
-            c2 = _ssh_run(ssh, "grep '^cpu ' /proc/stat", timeout=2.0)
-            p1 = [float(x) for x in c1.split()[1:]]
-            p2 = [float(x) for x in c2.split()[1:]]
-            if len(p1) >= 4 and len(p2) >= 4:
-                idle1 = p1[3] + (p1[4] if len(p1) > 4 else 0)
-                idle2 = p2[3] + (p2[4] if len(p2) > 4 else 0)
-                diff_total = sum(p2) - sum(p1)
-                if diff_total > 0:
-                    calc = (diff_total - (idle2 - idle1)) / diff_total * 100
-                    cpu_pct = round(max(0.0, min(100.0, calc)), 1)
-        except (ValueError, OSError, paramiko.SSHException):
-            pass
-
-        return {"Uptime": uptime_clean, "Memoria_Pct": mem_pct, "CPU_Pct": cpu_pct, "error": None}
-    except paramiko.AuthenticationException:
-        return {"error": "Usuário ou senha incorretos no SSH."}
-    except Exception as e:  # noqa: BLE001 — qualquer falha vira mensagem na tela
-        return {"error": f"Falha na conexão SSH com {ip}: {e}"}
-    finally:
-        ssh.close()
-
-
-# ----------------------------------------------------
-# 2. COLETOR EM SEGUNDO PLANO
-# ----------------------------------------------------
-class Collector:
-    """Roda as sondas em threads próprias e guarda o histórico em memória."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._ssh_wake = threading.Event()
-        self._pool = ThreadPoolExecutor(max_workers=len(DNS_TARGETS) + len(SERVICES))
-
-        self.ping_latest = {}            # nome -> (latência, perda)
-        self.http_latest = {}            # nome -> (ms, ok, detalhe)
-        self.ping_history = deque(maxlen=HISTORY_POINTS)   # (datetime, {nome: (lat, perda)})
-        self.http_history = deque(maxlen=HISTORY_POINTS)   # (datetime, {nome: (ms, ok)})
-        self.last_probe = None
-
-        self.ssh_creds = (os.getenv("ONT_IP", ""), os.getenv("ONT_USER", ""), os.getenv("ONT_PASS", ""))
-        self.ssh_latest = None
-        self.ssh_last_time = None
-        self.ssh_history = deque(maxlen=SSH_HISTORY_POINTS)  # (datetime, cpu, ram)
-
-        threading.Thread(target=self._probe_loop, name="netmon-probe", daemon=True).start()
-        threading.Thread(target=self._ssh_loop, name="netmon-ssh", daemon=True).start()
-
-    def stop(self):
-        self._stop.set()
-        self._ssh_wake.set()
-        self._pool.shutdown(wait=False, cancel_futures=True)
-
-    # --- ping + HTTP -------------------------------------------------
-    def _probe_once(self):
-        ping_futs = {t["name"]: self._pool.submit(ping_host, t["ip"]) for t in DNS_TARGETS}
-        http_futs = {s["name"]: self._pool.submit(check_service, s["url"]) for s in SERVICES}
-        pings = {name: f.result() for name, f in ping_futs.items()}
-        https = {name: f.result() for name, f in http_futs.items()}
-        now = dt.datetime.now()
-        with self._lock:
-            self.ping_latest = pings
-            self.http_latest = https
-            self.ping_history.append((now, pings))
-            self.http_history.append((now, {n: (ms, ok) for n, (ms, ok, _d) in https.items()}))
-            self.last_probe = now
-
-    def _probe_loop(self):
-        while not self._stop.is_set():
-            started = time.monotonic()
-            try:
-                self._probe_once()
-            except RuntimeError:  # pool encerrado durante o stop()
-                return
-            # Mantém o ritmo de 5s; se a rodada atrasar, a próxima começa logo em seguida
-            self._stop.wait(max(0.0, PROBE_INTERVAL_S - (time.monotonic() - started)))
-
-    # --- SSH ---------------------------------------------------------
-    def set_ssh_credentials(self, ip, user, password):
-        with self._lock:
-            self.ssh_creds = (ip, user, password)
-        self._ssh_wake.set()
-
-    def _ssh_loop(self):
-        while not self._stop.is_set():
-            with self._lock:
-                creds = self.ssh_creds
-            data = fetch_ssh_metrics(*creds)
-            now = dt.datetime.now()
-            with self._lock:
-                self.ssh_latest = data
-                self.ssh_last_time = now
-                if not data.get("error") and data["CPU_Pct"] is not None and data["Memoria_Pct"] is not None:
-                    self.ssh_history.append((now, data["CPU_Pct"], data["Memoria_Pct"]))
-            self._ssh_wake.wait(SSH_INTERVAL_S)
-            self._ssh_wake.clear()
-
-    # --- leitura para a interface ------------------------------------
-    def snapshot(self):
-        with self._lock:
-            return {
-                "ping_latest": dict(self.ping_latest),
-                "http_latest": dict(self.http_latest),
-                "ping_history": list(self.ping_history),
-                "http_history": list(self.http_history),
-                "last_probe": self.last_probe,
-                "ssh_creds": self.ssh_creds,
-                "ssh_latest": self.ssh_latest,
-                "ssh_last_time": self.ssh_last_time,
-                "ssh_history": list(self.ssh_history),
-            }
-
-
-@st.cache_resource(on_release=lambda c: c.stop())
-def get_collector():
-    return Collector()
-
-
-# ----------------------------------------------------
-# 3. INTERFACE
-# ----------------------------------------------------
 st.set_page_config(page_title="Monitor de Rede - Windows", layout="wide", page_icon="🌐")
 
+# ----------------------------------------------------
+# ESTILO
+# ----------------------------------------------------
 st.markdown("""
     <style>
     .card-grid {
@@ -346,6 +37,16 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         min-width: 0;
     }
+    .metric-card-green { border-left-color: #28a745 !important; }
+    .metric-card-orange { border-left-color: #fd7e14 !important; }
+    .metric-card-red { border-left-color: #dc3545 !important; }
+    .card-title { font-size: 0.85rem; color: #a6adc8; font-weight: 600; margin-bottom: 4px; }
+    .card-value { font-size: 1.4rem; font-weight: bold; color: #cdd6f4; }
+    .card-title, .card-value { overflow-wrap: anywhere; }
+    .card-badge { font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; display: inline-block; margin-top: 4px; }
+    .badge-green { background-color: rgba(40, 167, 69, 0.2); color: #28a745; }
+    .badge-orange { background-color: rgba(253, 126, 20, 0.2); color: #fd7e14; }
+    .badge-red { background-color: rgba(220, 53, 69, 0.2); color: #dc3545; }
     .chart-legend {
         display: flex;
         flex-wrap: wrap;
@@ -365,24 +66,60 @@ st.markdown("""
         h3 { font-size: 1.1rem !important; }
         .block-container { padding-left: 0.8rem !important; padding-right: 0.8rem !important; }
     }
-    .metric-card-green { border-left-color: #28a745 !important; }
-    .metric-card-orange { border-left-color: #fd7e14 !important; }
-    .metric-card-red { border-left-color: #dc3545 !important; }
-    .card-title { font-size: 0.85rem; color: #a6adc8; font-weight: 600; margin-bottom: 4px; }
-    .card-value { font-size: 1.4rem; font-weight: bold; color: #cdd6f4; }
-    .card-title, .card-value { overflow-wrap: anywhere; }
-    .card-badge { font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; display: inline-block; margin-top: 4px; }
-    .badge-green { background-color: rgba(40, 167, 69, 0.2); color: #28a745; }
-    .badge-orange { background-color: rgba(253, 126, 20, 0.2); color: #fd7e14; }
-    .badge-red { background-color: rgba(220, 53, 69, 0.2); color: #dc3545; }
     </style>
 """, unsafe_allow_html=True)
 
+# ----------------------------------------------------
+# SENHA DO PAINEL (só para acessos vindos de outros aparelhos)
+# ----------------------------------------------------
+# st.context.ip_address é None quando o acesso vem deste próprio PC (localhost).
+if (st.context.ip_address is not None
+        and credentials.panel_password_enabled()
+        and not st.session_state.get("auth_ok")):
+    st.title("🔒 Monitor de Rede")
+    with st.form("login"):
+        pwd = st.text_input("Senha do painel", type="password")
+        if st.form_submit_button("Entrar"):
+            if credentials.check_panel_password(pwd):
+                st.session_state.auth_ok = True
+                st.rerun()
+            time.sleep(1.5)   # atrasa tentativas por força bruta
+            st.error("Senha incorreta.")
+    st.stop()
+
+
+# ----------------------------------------------------
+# COLETOR
+# ----------------------------------------------------
+# Normalmente o coletor já foi iniciado pelo run.py antes do painel subir;
+# se o monitor foi aberto com "streamlit run monitor.py", ele nasce aqui.
+try:
+    collector = get_global_collector()
+except AlreadyRunning:
+    st.error(
+        "⚠️ O monitor já está rodando em outra janela ou na inicialização do Windows. "
+        "Abra **http://localhost:8501** para vê-lo."
+    )
+    st.stop()
+
+# ----------------------------------------------------
+# COMPONENTES
+# ----------------------------------------------------
 LEVEL_STYLE = {
     "green": ("metric-card-green", "badge-green", "🟢"),
     "orange": ("metric-card-orange", "badge-orange", "🟠"),
     "red": ("metric-card-red", "badge-red", "🔴"),
 }
+
+# Paleta de 20 cores distintas e legíveis em fundo escuro (uma por série)
+PALETTE = [
+    "#4e9bf5", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+    "#edc948", "#b07aa1", "#ff9da7", "#c49c7a", "#bab0ac",
+    "#8cd17d", "#86d3f0", "#ffbe7d", "#a0a8ff", "#f1ce63",
+    "#d37295", "#fabfd2", "#d4b84a", "#4fc1b0", "#e6a6ff",
+]
+
+WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 
 def card(icon, title, value, badge, level):
@@ -401,15 +138,6 @@ def render_grid(cards):
     st.markdown(f'<div class="card-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
-# Paleta de 20 cores distintas e legíveis em fundo escuro (uma por série)
-PALETTE = [
-    "#4e9bf5", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
-    "#edc948", "#b07aa1", "#ff9da7", "#c49c7a", "#bab0ac",
-    "#8cd17d", "#86d3f0", "#ffbe7d", "#a0a8ff", "#f1ce63",
-    "#d37295", "#fabfd2", "#d4b84a", "#4fc1b0", "#e6a6ff",
-]
-
-
 def color_map(names):
     return {n: PALETTE[i % len(PALETTE)] for i, n in enumerate(names)}
 
@@ -423,18 +151,12 @@ def legend_html(names, colors):
     return f'<div class="chart-legend">{items}</div>'
 
 
-def history_chart(history, names, pick, y_title, y_max=None):
-    """Gráfico de linhas com eixo Y travado em 0 e zoom só no eixo do tempo.
+def lines_chart(df, names, y_title, y_max=None, time_fmt="%H:%M:%S", height=280):
+    """Linhas com eixo Y travado em 0 e zoom só no eixo do tempo.
 
-    history: [(datetime, {nome: valores})]; pick extrai o número de `valores`.
+    df em formato longo: colunas Horário (datetime), Alvo, Valor.
     """
-    rows = [
-        {"Horário": ts, "Alvo": n, "Valor": pick(vals[n])}
-        for ts, vals in history for n in names if n in vals
-    ]
-    df = pd.DataFrame(rows, columns=["Horário", "Alvo", "Valor"])
     colors = color_map(names)
-
     # Zoom (roda do mouse) e arraste só no eixo X; duplo clique volta ao normal.
     # O arraste usa eventos de mouse para não "prender" a rolagem da página no celular.
     zoom = alt.selection_interval(
@@ -443,10 +165,9 @@ def history_chart(history, names, pick, y_title, y_max=None):
     )
     y_scale = (alt.Scale(domain=[0, y_max], clamp=True) if y_max is not None
                else alt.Scale(domainMin=0, nice=True, clamp=True))
-
     base = alt.Chart(df).encode(
         x=alt.X("Horário:T", title=None,
-                axis=alt.Axis(labelExpr="timeFormat(datum.value, '%H:%M:%S')",
+                axis=alt.Axis(labelExpr=f"timeFormat(datum.value, '{time_fmt}')",
                               labelOverlap=True, tickCount=5, grid=False)),
         y=alt.Y("Valor:Q", title=y_title, scale=y_scale, axis=alt.Axis(tickCount=5)),
         color=alt.Color("Alvo:N", legend=None,
@@ -457,23 +178,45 @@ def history_chart(history, names, pick, y_title, y_max=None):
     points = base.mark_point(size=70, opacity=0, clip=True).encode(
         tooltip=[
             alt.Tooltip("Alvo:N", title="Alvo"),
-            alt.Tooltip("Horário:T", title="Horário", format="%H:%M:%S"),
+            alt.Tooltip("Horário:T", title="Horário", format="%d/%m %H:%M:%S"),
             alt.Tooltip("Valor:Q", title=y_title, format=".1f"),
         ]
     )
-    st.altair_chart(alt.layer(lines, points).properties(height=280), width="stretch")
+    st.altair_chart(alt.layer(lines, points).properties(height=height), width="stretch")
     st.markdown(legend_html(names, colors), unsafe_allow_html=True)
 
 
-def waiting_message(snap):
-    if snap["last_probe"] is None:
+def history_chart(history, names, pick, y_title, y_max=None):
+    """history: [(datetime, {nome: valores})]; pick extrai o número de `valores`."""
+    rows = [
+        {"Horário": ts, "Alvo": n, "Valor": pick(vals[n])}
+        for ts, vals in history for n in names if n in vals
+    ]
+    lines_chart(pd.DataFrame(rows, columns=["Horário", "Alvo", "Valor"]), names, y_title, y_max)
+
+
+def fmt_duration(seconds):
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}min"
+    if m:
+        return f"{m}min {s:02d}s"
+    return f"{s}s"
+
+
+def waiting(last):
+    if last is None:
         st.info("⏳ Coletando a primeira amostra…")
         return True
     return False
 
 
+# ----------------------------------------------------
+# CABEÇALHO
+# ----------------------------------------------------
 st.title("🌐 Monitor de Rede & Latência")
-collector = get_collector()
 
 # Pausar congela a tela (a coleta continua em segundo plano). Útil para dar zoom
 # nos gráficos sem que a atualização a cada 5s volte o zoom ao normal.
@@ -487,22 +230,39 @@ def current_snapshot():
         return st.session_state.frozen_snapshot
     return collector.snapshot()
 
-tab1, tab2, tab3 = st.tabs([
+
+@st.fragment(run_every=cfg.PING_INTERVAL_S)
+def render_active_incidents():
+    active = collector.snapshot()["active_incidents"]
+    now = time.time()
+    for kind, target, start, detail in sorted(active, key=lambda a: a[2] or now):
+        dur = fmt_duration(now - start) if start else ""
+        who = "" if target in ("Gateway", "DNS públicos") else f" — {target}"
+        st.error(f"{KIND_ICONS.get(kind, '⚠️')} **{kind}{who}** há {dur} · {detail}")
+
+
+render_active_incidents()
+
+tab1, tab2, tab3, tab4 = st.tabs([
     "⚡ Latência & DNS",
     "🌐 Serviços Web",
+    "📈 Histórico",
     "📡 ONT (SSH)",
 ])
 
 
-@st.fragment(run_every=PROBE_INTERVAL_S)
+# ----------------------------------------------------
+# ABA 1: PING
+# ----------------------------------------------------
+@st.fragment(run_every=cfg.PING_INTERVAL_S)
 def render_ping_tab():
     snap = current_snapshot()
-    st.caption(f"Última coleta: {snap['last_probe']:%H:%M:%S}" if snap["last_probe"] else "")
-    if waiting_message(snap):
+    if waiting(snap["last_ping"]):
         return
+    st.caption(f"Última coleta: {snap['last_ping']:%H:%M:%S}")
 
     cards = []
-    for t in DNS_TARGETS:
+    for t in cfg.PING_TARGETS:
         lat, loss = snap["ping_latest"].get(t["name"], (None, 100))
         level = "green" if loss == 0 else ("orange" if loss < 100 else "red")
         if lat is None:
@@ -512,7 +272,7 @@ def render_ping_tab():
         cards.append(card(t["icon"], t["name"], value, f"{loss}% Perda", level))
     render_grid(cards)
 
-    names = [t["name"] for t in DNS_TARGETS]
+    names = [t["name"] for t in cfg.PING_TARGETS]
     g1, g2 = st.columns(2)
     with g1:
         st.subheader("📊 Latência (ms) · 30 min")
@@ -522,17 +282,21 @@ def render_ping_tab():
         history_chart(snap["ping_history"], names, lambda v: v[1], "Perda (%)", y_max=100)
 
 
-@st.fragment(run_every=PROBE_INTERVAL_S)
+# ----------------------------------------------------
+# ABA 2: SERVIÇOS HTTP
+# ----------------------------------------------------
+@st.fragment(run_every=cfg.PING_INTERVAL_S)
 def render_services_tab():
     snap = current_snapshot()
-    st.caption(f"Última coleta: {snap['last_probe']:%H:%M:%S}" if snap["last_probe"] else "")
-    if waiting_message(snap):
+    if waiting(snap["last_http"]):
         return
+    st.caption(f"Última checagem: {snap['last_http']:%H:%M:%S} · os sites são verificados a cada "
+               f"{cfg.HTTP_INTERVAL_S}s para não sobrecarregar os servidores")
 
     history = snap["http_history"]
     cards = []
     availability = {}
-    for s in SERVICES:
+    for s in cfg.SERVICES:
         name = s["name"]
         samples = [row[name][1] for _, row in history if name in row]
         avail = 100 * sum(samples) / len(samples) if samples else 0.0
@@ -547,7 +311,7 @@ def render_services_tab():
         cards.append(card(s["icon"], name, value, f"{avail:.1f}% disp. · {detail}", level))
     render_grid(cards)
 
-    names = [s["name"] for s in SERVICES]
+    names = [s["name"] for s in cfg.SERVICES]
     colors = color_map(names)
     avail_df = pd.DataFrame({"Serviço": names, "Disponibilidade": [availability[n] for n in names]})
 
@@ -568,7 +332,170 @@ def render_services_tab():
         st.altair_chart(bars, width="stretch")
 
 
-@st.fragment(run_every=PROBE_INTERVAL_S)
+# ----------------------------------------------------
+# ABA 3: HISTÓRICO (SQLite)
+# ----------------------------------------------------
+PERIODS = {
+    "Últimas 24 horas": (1, "5min", "%H:%M"),
+    "Últimos 7 dias": (7, "30min", "%d/%m %Hh"),
+    "Últimos 30 dias": (30, "2h", "%d/%m"),
+    "Últimos 90 dias": (90, "6h", "%d/%m"),
+}
+
+
+def to_local(ts_series):
+    return pd.to_datetime(ts_series.map(dt.datetime.fromtimestamp))
+
+
+def render_history_tab():
+    storage = collector.storage
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    period = c1.selectbox("Período", list(PERIODS), index=0, key="hist_period")
+    c2.button("🔄 Atualizar", width="stretch")
+    days, bucket, time_fmt = PERIODS[period]
+    now = int(time.time())
+    since = now - days * 86400
+
+    first = storage.first_ts()
+    if first is None:
+        st.info("O histórico começa a ser gravado agora; volte em alguns minutos.")
+        return
+    st.caption(f"Histórico gravado desde {dt.datetime.fromtimestamp(first):%d/%m/%Y %H:%M} "
+               f"· guardado por {cfg.RETENTION_DAYS} dias em data/netmon.db")
+
+    # --- Incidentes do período ------------------------------------------
+    inc = storage.incidents(since)
+    if not inc.empty:
+        inc["end_eff"] = inc["end_ts"].fillna(now).astype(int)
+        inc["dur"] = (inc["end_eff"].clip(upper=now) - inc["start_ts"].clip(lower=since)).clip(lower=0)
+    outages = inc[inc["kind"].isin(OUTAGE_KINDS)] if not inc.empty else inc
+    downtime = int(outages["dur"].sum()) if not outages.empty else 0
+
+    # --- Ping por minuto -> séries agregadas ----------------------------
+    pm = storage.ping_minutes(since)
+    dns_names = [t["name"] for t in cfg.DNS_TARGETS]
+    internet = (pm[pm["target"].isin(dns_names)]
+                .groupby("ts").agg(lat=("lat_avg", "mean"), loss=("loss_avg", "mean"))
+                .reset_index())
+    gateway = (pm[pm["target"] == cfg.GATEWAY_NAME][["ts", "lat_avg", "loss_avg"]]
+               .rename(columns={"lat_avg": "lat", "loss_avg": "loss"}))
+
+    # Tempo coberto pelo monitor no período = desde o início dos dados, menos períodos desligado
+    window_start = max(since, first)
+    off = inc[inc["kind"] == KIND_MONITOR_OFF] if not inc.empty else inc
+    off_time = int(off["dur"].clip(lower=0).sum()) if not off.empty else 0
+    monitored = max(0, now - window_start - off_time)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("⏱️ Tempo sem internet", fmt_duration(downtime))
+    m2.metric("🔌 Quedas", len(outages))
+    m3.metric("📶 Latência média (internet)",
+              f"{internet['lat'].mean():.0f} ms" if internet["lat"].notna().any() else "—")
+    m4.metric("✅ Disponibilidade",
+              f"{max(0.0, 100 * (1 - downtime / monitored)):.2f}%" if monitored else "—",
+              help="Sobre o tempo em que o monitor estava ligado.")
+
+    if not internet.empty:
+        series = []
+        for label, df in (("Internet (média dos DNS)", internet), ("Gateway (rede local)", gateway)):
+            if df.empty:
+                continue
+            d = df.copy()
+            d["Horário"] = to_local(d["ts"])
+            d = d.set_index("Horário")[["lat", "loss"]].resample(bucket).mean().reset_index()
+            d["Alvo"] = label
+            series.append(d)
+        agg = pd.concat(series, ignore_index=True)
+        names = list(agg["Alvo"].unique())
+
+        g1, g2 = st.columns(2)
+        with g1:
+            st.subheader("📊 Latência (ms)")
+            lines_chart(agg.rename(columns={"lat": "Valor"})[["Horário", "Alvo", "Valor"]],
+                        names, "Latência (ms)", time_fmt=time_fmt)
+        with g2:
+            st.subheader("📉 Perda de Pacotes (%)")
+            lines_chart(agg.rename(columns={"loss": "Valor"})[["Horário", "Alvo", "Valor"]],
+                        names, "Perda (%)", y_max=100, time_fmt=time_fmt)
+
+        # --- Mapa de calor: dia da semana x hora ------------------------
+        st.subheader("🗓️ Em que horário a internet piora?")
+        metric = st.radio("Métrica", ["Latência (ms)", "Perda (%)"], horizontal=True,
+                          key="heat_metric", label_visibility="collapsed")
+        col = "lat" if metric.startswith("Lat") else "loss"
+        h = internet.copy()
+        h["Horário"] = to_local(h["ts"])
+        h["Dia"] = h["Horário"].dt.dayofweek.map(lambda i: WEEKDAYS[i])
+        h["Hora"] = h["Horário"].dt.hour
+        heat = h.groupby(["Dia", "Hora"])[col].mean().reset_index().rename(columns={col: "Valor"})
+        heatmap = alt.Chart(heat).mark_rect(cornerRadius=2).encode(
+            x=alt.X("Hora:O", title="Hora do dia", scale=alt.Scale(domain=list(range(24))),
+                    axis=alt.Axis(labelAngle=0, labelOverlap=True)),
+            y=alt.Y("Dia:O", title=None, scale=alt.Scale(domain=WEEKDAYS),
+                    axis=alt.Axis(labelOverlap=False)),
+            color=alt.Color("Valor:Q", title=metric,
+                            scale=alt.Scale(scheme="yelloworangered", domainMin=0),
+                            legend=alt.Legend(orient="bottom", gradientLength=220)),
+            tooltip=[alt.Tooltip("Dia:O"), alt.Tooltip("Hora:O"),
+                     alt.Tooltip("Valor:Q", title=metric, format=".1f")],
+        ).properties(height=alt.Step(26))
+        st.altair_chart(heatmap, width="stretch")
+        st.caption("Cada quadrado é a média daquele dia da semana e hora no período escolhido. "
+                   "Cores mais quentes = pior.")
+
+    # --- Tabela de incidentes -------------------------------------------
+    st.subheader("🚨 Registro de quedas e instabilidades")
+    if inc.empty:
+        st.success("Nenhum incidente registrado no período. 🎉")
+        return
+    kinds = sorted(inc["kind"].unique())
+    default = [k for k in kinds if k != KIND_MONITOR_OFF]
+    chosen = st.multiselect("Tipos", kinds, default=default, key="inc_kinds")
+    view = inc[inc["kind"].isin(chosen)].copy()
+    table = pd.DataFrame({
+        "Início": to_local(view["start_ts"]),
+        "Fim": pd.to_datetime([dt.datetime.fromtimestamp(e) if pd.notna(e) else None
+                               for e in view["end_ts"]]),
+        "Duração": [fmt_duration(d) + (" ⏳ em andamento" if pd.isna(e) else "")
+                    for d, e in zip(view["dur"], view["end_ts"])],
+        "Causa provável": view["kind"].map(lambda k: f"{KIND_ICONS.get(k, '')} {k}"),
+        "Alvo": view["target"],
+        "Detalhe": view["detail"],
+    })
+    st.dataframe(
+        table, hide_index=True, width="stretch",
+        column_config={
+            "Início": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm:ss"),
+            "Fim": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm:ss"),
+        },
+    )
+    st.download_button(
+        "⬇️ Baixar registro (CSV)",
+        table.assign(Início=table["Início"].dt.strftime("%d/%m/%Y %H:%M:%S"),
+                     Fim=[f"{f:%d/%m/%Y %H:%M:%S}" if pd.notna(f) else "em andamento"
+                          for f in table["Fim"]])
+             .to_csv(index=False, sep=";").encode("utf-8-sig"),
+        file_name=f"quedas_internet_{dt.date.today():%Y-%m-%d}.csv",
+        mime="text/csv",
+        help="Útil como prova ao reclamar com a operadora ou na Anatel.",
+    )
+    with st.expander("ℹ️ Como a causa é decidida"):
+        st.markdown(
+            f"""
+- **🏠 Rede local** — o roteador (gateway) parou de responder: problema no Wi-Fi, cabo ou roteador.
+- **🌐 Internet / Operadora** — o roteador responde, mas {cfg.ISP_DOWN_MIN_TARGETS}+ dos {len(cfg.DNS_TARGETS)} DNS públicos não.
+- **〰️ Instabilidade** — internet no ar, mas com perda média ≥ {cfg.INSTABILITY_LOSS_PCT}% ou latência mediana ≥ {cfg.INSTABILITY_LATENCY_MS} ms.
+- **🧩 Serviço fora do ar** — internet ok, mas o site falhou por {cfg.SERVICE_OPEN_AFTER} checagens seguidas.
+- **💤 Monitor desligado** — período sem dados (PC desligado ou monitor fechado).
+
+Um incidente só é aberto após {cfg.OUTAGE_OPEN_AFTER * cfg.PING_INTERVAL_S}s seguidos de falha, para ignorar soluços isolados.
+"""
+        )
+
+
+# ----------------------------------------------------
+# ABA 4: ONT VIA SSH
+# ----------------------------------------------------
+@st.fragment(run_every=cfg.PING_INTERVAL_S)
 def render_ssh_status():
     snap = current_snapshot()
     data = snap["ssh_latest"]
@@ -600,27 +527,38 @@ def render_ssh_status():
         history_chart(hist, ["CPU (%)", "RAM (%)"], lambda v: v, "Uso (%)", y_max=100)
 
 
+PASS_SOURCE_TEXT = {
+    "keyring": "🔐 Senha guardada no Gerenciador de Credenciais do Windows.",
+    "env": "⚠️ Senha lida do arquivo .env (texto puro). Salve-a abaixo para movê-la ao Gerenciador de Credenciais.",
+    "memória": "⚠️ Não foi possível salvar no Gerenciador de Credenciais; a senha vale só até fechar o monitor.",
+    None: "⚠️ Nenhuma senha configurada.",
+}
+
 with tab1:
-    st.subheader(f"⚡ Latência dos DNS públicos ({PROBE_INTERVAL_S}s)")
+    st.subheader(f"⚡ Latência dos DNS públicos ({cfg.PING_INTERVAL_S}s)")
     render_ping_tab()
 
 with tab2:
-    st.subheader(f"🌐 Web, Redes, Streaming & Games ({PROBE_INTERVAL_S}s)")
+    st.subheader(f"🌐 Web, Redes, Streaming & Games ({cfg.HTTP_INTERVAL_S}s)")
     render_services_tab()
 
 with tab3:
-    st.subheader(f"📡 Roteador MitraStar (coleta a cada {SSH_INTERVAL_S}s)")
-    cur_ip, cur_user, _cur_pass = collector.snapshot()["ssh_creds"]
+    st.subheader("📈 Histórico e registro de quedas")
+    render_history_tab()
+
+with tab4:
+    st.subheader(f"📡 Roteador MitraStar (coleta a cada {cfg.SSH_INTERVAL_S}s)")
+    snap0 = collector.snapshot()
+    st.caption(PASS_SOURCE_TEXT.get(snap0["ssh_pass_source"], ""))
     with st.expander("⚙️ Credenciais SSH"):
         with st.form("ssh_form"):
             f1, f2, f3 = st.columns(3)
-            new_ip = f1.text_input("IP da ONT", cur_ip)
-            new_user = f2.text_input("Usuário SSH", cur_user)
-            # A senha nunca é enviada ao navegador; em branco = mantém a atual (.env)
+            new_ip = f1.text_input("IP da ONT", snap0["ssh_ip"])
+            new_user = f2.text_input("Usuário SSH", snap0["ssh_user"])
+            # A senha nunca é enviada ao navegador; em branco = mantém a atual
             new_pass = f3.text_input("Senha SSH", "", type="password",
                                      placeholder="(manter a senha atual)")
-            if st.form_submit_button("Aplicar e reconectar"):
-                collector.set_ssh_credentials(new_ip.strip(), new_user.strip(),
-                                              new_pass or collector.snapshot()["ssh_creds"][2])
+            if st.form_submit_button("Salvar e reconectar"):
+                collector.set_ssh_credentials(new_ip.strip(), new_user.strip(), new_pass or None)
                 st.toast("Reconectando com as novas credenciais…")
     render_ssh_status()

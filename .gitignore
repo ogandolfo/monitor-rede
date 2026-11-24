@@ -1,6 +1,9 @@
 # Arquivo de variáveis de ambiente com dados sensíveis
 .env
 
+# Histórico (SQLite), chave SSH fixada da ONT e trava de instância
+data/
+
 # Cache do Python
 __pycache__/
 *.pyc
@@ -8,3 +11,6 @@ __pycache__/
 # Ambientes virtuais (caso use)
 venv/
 .venv/
+
+# Configuração local do Claude Code
+.claude/
