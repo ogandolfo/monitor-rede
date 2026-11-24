@@ -1,7 +1,6 @@
-streamlit
-pandas
-requests
-paramiko
-python-dotenv
-streamlit-autorefresh
-urllib3
+streamlit>=1.64
+pandas>=2.0
+requests>=2.31
+paramiko>=3.4
+python-dotenv>=1.0
+urllib3>=2.0
