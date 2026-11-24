@@ -29,6 +29,17 @@ Cada problema vira um registro com início, fim, duração e **causa provável**
 
 Falhas isoladas de poucos segundos são ignoradas (um incidente só abre após 10s seguidos). Problemas em andamento aparecem num alerta vermelho no topo do painel. O CSV serve como prova ao reclamar com a operadora ou na Anatel.
 
+### 🗓️ Régua de cores do mapa de calor
+
+O mapa *dia da semana × hora* usa uma escala **fixa** do verde ao vermelho, calibrada para uso exigente (jogos online, VPN, Teams, SSH) numa fibra cujo normal é 8–12 ms:
+
+| | 🟢 ótimo | 🟡 aceitável | 🟠 ruim | 🔴 péssimo |
+| --- | --- | --- | --- | --- |
+| **Latência** (média até os DNS públicos) | até 20 ms | ~40 ms | ~70 ms | 100 ms ou mais |
+| **Perda de pacotes** | 0% | ~2% | ~5% | 10% ou mais |
+
+Os pontos da régua ficam em `HEAT_LATENCY_STOPS_MS` e `HEAT_LOSS_STOPS_PCT`, em [netmon/config.py](netmon/config.py).
+
 ---
 
 ## 🛠️ Instalação
@@ -58,7 +69,7 @@ Na primeira execução a senha `ONT_PASS` é **copiada para o Gerenciador de Cre
 | `Executar_Monitor.bat` | Abre o monitor com janela. Se ele já estiver rodando, só abre o painel. |
 | `Iniciar_com_Windows.bat` | Registra o monitor para iniciar **sozinho e sem janela** sempre que você entrar no Windows, e já o inicia. |
 | `Remover_Inicializacao.bat` | Desfaz o item acima. |
-| `Definir_Senha_Painel.bat` | Define a senha pedida quando o painel é aberto de **outro aparelho** (ex.: celular). |
+| `Definir_Senha_Painel.bat` | *(Opcional)* Define uma senha para quando o painel é aberto de **outro aparelho** (ex.: celular). |
 
 Pelo terminal: `python run.py`. O painel abre em <http://localhost:8501>.
 
@@ -71,7 +82,7 @@ O `run.py` liga a coleta **antes** do painel, então o histórico é gravado mes
 No celular (mesmo Wi-Fi), abra `http://<IP-deste-PC>:8501`. O endereço aparece no terminal como *Network URL*. O layout se adapta à tela.
 
 * Se não abrir, libere o Python no Firewall do Windows.
-* **Recomendado:** rode `Definir_Senha_Painel.bat` para exigir senha nos acessos pela rede. Neste PC o painel continua abrindo sem senha.
+* Por padrão o painel abre **sem senha**. Se a sua rede tiver dispositivos em que você não confia (visitas, Wi-Fi compartilhado), rode `Definir_Senha_Painel.bat` para exigir senha nos acessos pela rede; neste PC ele continua abrindo direto. Para tirar a senha: `python -m netmon.credentials painel --remover`.
 * Para restringir só a este PC, troque `address` para `"localhost"` em [.streamlit/config.toml](.streamlit/config.toml).
 
 ### 🔍 Gráficos
@@ -103,4 +114,21 @@ No celular (mesmo Wi-Fi), abra `http://<IP-deste-PC>:8501`. O endereço aparece 
 
 ## 🔧 Personalização
 
-Intervalos, limites de diagnóstico, tempo de retenção e as listas de alvos (`DNS_TARGETS`, `SERVICES`) ficam em [netmon/config.py](netmon/config.py).
+Intervalos, limites de diagnóstico, régua de cores, tempo de retenção e as listas de alvos (`DNS_TARGETS`, `SERVICES`) ficam em [netmon/config.py](netmon/config.py). Depois de alterar, reinicie o monitor (feche-o ou, se ele inicia com o Windows, rode `Iniciar_com_Windows.bat` de novo).
+
+---
+
+## 🗂️ Estrutura do projeto
+
+| Caminho | Papel |
+| --- | --- |
+| `run.py` | Ponto de entrada: liga a coleta e sobe o painel. |
+| `monitor.py` | Painel Streamlit (abas, gráficos, histórico). |
+| `netmon/config.py` | Configurações, limites e listas de alvos. |
+| `netmon/probes.py` | Sondas: ping, HTTP e SSH da ONT. |
+| `netmon/collector.py` | Coletor em segundo plano (threads de ping, HTTP e SSH). |
+| `netmon/incidents.py` | Detecção de quedas e diagnóstico da causa. |
+| `netmon/storage.py` | Histórico em SQLite. |
+| `netmon/credentials.py` | Senhas no Gerenciador de Credenciais do Windows. |
+| `scripts/autostart.ps1` | Registra/remove a tarefa de inicialização do Windows. |
+| `.streamlit/config.toml` | Endereço de rede, porta e tema do painel. |

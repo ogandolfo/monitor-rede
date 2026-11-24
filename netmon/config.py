@@ -39,6 +39,13 @@ INSTABILITY_LOSS_PCT = 10     # perda média nos DNS que caracteriza instabilida
 INSTABILITY_LATENCY_MS = 100  # latência mediana nos DNS que caracteriza instabilidade
 MONITOR_GAP_S = 120           # lacuna mínima para registrar "monitor desligado"
 
+# --- Régua de cores do mapa de calor (aba Histórico) -------------------
+# Pontos 🟢 ótimo → 🟡 aceitável → 🟠 ruim → 🔴 péssimo (o último e acima = vermelho).
+# Calibrada para uso exigente (jogos online, VPN, Teams, SSH) numa fibra cujo
+# normal é 8–12 ms até os DNS públicos.
+HEAT_LATENCY_STOPS_MS = [0, 20, 40, 70, 100]
+HEAT_LOSS_STOPS_PCT = [0, 0.5, 2, 5, 10]
+
 # --- Alvos -------------------------------------------------------------
 GATEWAY_NAME = "Gateway"
 GATEWAY_IP = os.getenv("ONT_IP", "192.168.1.1")

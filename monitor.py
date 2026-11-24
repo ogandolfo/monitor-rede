@@ -122,14 +122,23 @@ PALETTE = [
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 # Escalas FIXAS do mapa de calor (verde = ótimo, vermelho = ruim) — não dependem
-# dos dados do período. Calibradas para uso exigente (jogos online, VPN, Teams, SSH)
-# numa fibra cujo normal é 8–12 ms até os DNS públicos.
+# dos dados do período. Os pontos ficam em netmon/config.py.
 HEAT_COLORS = ["#1a9850", "#91cf60", "#fee08b", "#fc8d59", "#d73027"]
+
+
+def _heat_caption(stops, unit, labels=("ótimo", "aceitável", "ruim", "péssimo")):
+    def fmt(v):
+        return f"{v:g}".replace(".", ",") + unit
+    s = stops
+    return (f"🟢 até {fmt(s[1])} {labels[0]} · 🟡 ~{fmt(s[2])} {labels[1]} · "
+            f"🟠 ~{fmt(s[3])} {labels[2]} · 🔴 {fmt(s[4])} ou mais {labels[3]}")
+
+
 HEAT_SCALES = {
-    "Latência (ms)": {"stops": [0, 20, 40, 70, 100],
-                      "caption": "🟢 até 20 ms ótimo · 🟡 ~40 ms aceitável · 🟠 ~70 ms ruim · 🔴 100 ms ou mais péssimo"},
-    "Perda (%)": {"stops": [0, 0.5, 2, 5, 10],
-                  "caption": "🟢 0% ideal · 🟡 ~2% já se nota em jogos e chamadas · 🟠 ~5% ruim · 🔴 10% ou mais péssimo"},
+    "Latência (ms)": {"stops": cfg.HEAT_LATENCY_STOPS_MS,
+                      "caption": _heat_caption(cfg.HEAT_LATENCY_STOPS_MS, " ms")},
+    "Perda (%)": {"stops": cfg.HEAT_LOSS_STOPS_PCT,
+                  "caption": _heat_caption(cfg.HEAT_LOSS_STOPS_PCT, "%")},
 }
 
 

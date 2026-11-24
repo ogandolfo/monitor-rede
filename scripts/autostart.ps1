@@ -28,6 +28,15 @@ if ($Acao -eq "status") {
     exit 0
 }
 
+# Se já estiver rodando, para antes (assim rodar de novo também serve para reiniciar)
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+}
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+    Where-Object { $_.CommandLine -match 'run\.py' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+
 # pythonw.exe = Python sem janela de console
 $python = (Get-Command python -ErrorAction Stop).Source
 $pythonw = & $python -c "import sys, os; print(os.path.join(os.path.dirname(sys.executable), 'pythonw.exe'))"
