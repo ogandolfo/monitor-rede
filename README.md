@@ -23,7 +23,8 @@ Você abre o painel no navegador do computador **ou do celular**.
 5. [Entendendo o painel](#painel)
 6. [Problemas comuns](#problemas)
 7. [Como desinstalar](#desinstalar)
-8. [Para quem quer mexer no código](#codigo)
+8. [Encontrou um problema ou tem uma ideia?](#feedback)
+9. [Para quem quer mexer no código](#codigo)
 
 ---
 
@@ -61,19 +62,32 @@ Você vai precisar de:
 
 ### Passo 2 — Baixar o monitor
 
-1. Nesta página do GitHub, clique no botão verde **`<> Code`** (no topo da lista de arquivos).
-2. Clique em **Download ZIP**.
-3. Abra a pasta **Downloads**, clique com o botão direito no arquivo `monitor-rede-main.zip` e escolha **Extrair tudo…** → **Extrair**.
+1. Abra a página de versões: **<https://github.com/ogandolfo/monitor-rede/releases/latest>**
+   *(ou, nesta página do GitHub, clique em **Releases** na coluna da direita).*
+2. Na versão marcada como **Latest**, desça até **Assets** e clique em **Source code (zip)**.
+3. Abra a pasta **Downloads**, clique com o botão direito no arquivo baixado (algo como `monitor-rede-1.0.zip`) e escolha **Extrair tudo…** → **Extrair**.
 4. Mova a pasta extraída para um lugar fixo, por exemplo `C:\MonitorRede`.
    > 💡 Escolha um lugar definitivo: se você mover a pasta depois, vai precisar rodar o `Instalar.bat` de novo.
+
+> ⚠️ Baixe sempre pela página de **Releases**, e não pelo botão verde **`<> Code` → Download ZIP**. O botão verde entrega a versão em desenvolvimento, que pode estar no meio de uma mudança. As Releases são versões testadas.
 
 <details>
 <summary>Sabe usar Git? Clique aqui.</summary>
 
 ```bash
-git clone https://github.com/ogandolfo/monitor-rede.git
+git clone --branch v1.0 https://github.com/ogandolfo/monitor-rede.git
 ```
+
+Troque `v1.0` pela versão mais recente listada em Releases.
 </details>
+
+### 🔄 Atualizar para uma versão nova
+
+1. Baixe e extraia a versão nova (como no Passo 2).
+2. Se o monitor estiver aberto numa janela preta, feche-a. *(Se ele inicia com o Windows, não precisa: o instalador cuida disso.)*
+3. Copie a pasta **`data`** e o arquivo **`.env`** da pasta antiga para a nova. Eles guardam o seu histórico e a sua configuração.
+4. Rode o **`Instalar.bat`** da pasta nova e responda **s** para iniciar com o Windows, se você usava essa opção.
+5. Confira se o painel abre em <http://localhost:8501> e só então apague a pasta antiga.
 
 ### Passo 3 — Rodar o instalador
 
@@ -251,6 +265,22 @@ Só pode rodar uma cópia por vez. Ele provavelmente já está rodando em segund
 1. Dê dois cliques em `Remover_Inicializacao.bat`.
 2. Apague a pasta do monitor. **Atenção:** isso apaga também o histórico.
 3. *(Opcional)* Apague as senhas guardadas: menu Iniciar → **Gerenciador de Credenciais** → **Credenciais do Windows** → remova os itens **NetMon-ONT** e **NetMon-Painel**.
+
+---
+
+<a id="feedback"></a>
+
+## 💬 Encontrou um problema ou tem uma ideia?
+
+Abra uma **Issue**: <https://github.com/ogandolfo/monitor-rede/issues> → botão verde **New issue**.
+
+Para ajudar a resolver mais rápido, conte:
+
+* o que você estava fazendo e o que aconteceu (uma captura de tela ajuda muito);
+* a versão do monitor (o nome da pasta, ex.: `monitor-rede-1.0`) e do Windows;
+* se for erro em segundo plano, o conteúdo do arquivo `data\netmon.log`.
+
+> ⚠️ **Nunca** coloque senhas, o arquivo `.env` ou o seu IP público numa Issue: elas são públicas.
 
 ---
 
