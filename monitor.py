@@ -121,6 +121,18 @@ PALETTE = [
 
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
+# Escalas FIXAS do mapa de calor (verde = ótimo, vermelho = ruim), com faixas de
+# referência para internet residencial — não dependem dos dados do período.
+# Latência até os DNS públicos: em fibra, 5–20 ms é o normal; acima de ~100 ms
+# chamadas e jogos já sofrem. Acima de 150 ms fica tudo vermelho.
+HEAT_COLORS = ["#1a9850", "#91cf60", "#fee08b", "#fc8d59", "#d73027"]
+HEAT_SCALES = {
+    "Latência (ms)": {"stops": [0, 20, 50, 100, 150],
+                      "caption": "🟢 até 20 ms ótimo · 🟡 ~50 ms aceitável · 🟠 ~100 ms ruim · 🔴 150 ms ou mais péssimo"},
+    "Perda (%)": {"stops": [0, 1, 3, 10, 25],
+                  "caption": "🟢 0% ideal · 🟡 ~3% já atrapalha chamadas · 🟠 ~10% ruim · 🔴 25% ou mais péssimo"},
+}
+
 
 def card(icon, title, value, badge, level):
     card_cls, badge_cls, dot = LEVEL_STYLE[level]
@@ -433,14 +445,16 @@ def render_history_tab():
             y=alt.Y("Dia:O", title=None, scale=alt.Scale(domain=WEEKDAYS),
                     axis=alt.Axis(labelOverlap=False)),
             color=alt.Color("Valor:Q", title=metric,
-                            scale=alt.Scale(scheme="yelloworangered", domainMin=0),
-                            legend=alt.Legend(orient="bottom", gradientLength=220)),
+                            scale=alt.Scale(domain=HEAT_SCALES[metric]["stops"], range=HEAT_COLORS,
+                                            clamp=True),
+                            legend=alt.Legend(orient="bottom", gradientLength=240,
+                                              values=HEAT_SCALES[metric]["stops"])),
             tooltip=[alt.Tooltip("Dia:O"), alt.Tooltip("Hora:O"),
                      alt.Tooltip("Valor:Q", title=metric, format=".1f")],
         ).properties(height=alt.Step(26))
         st.altair_chart(heatmap, width="stretch")
-        st.caption("Cada quadrado é a média daquele dia da semana e hora no período escolhido. "
-                   "Cores mais quentes = pior.")
+        st.caption(f"Cada quadrado é a média daquele dia da semana e hora no período escolhido. "
+                   f"{HEAT_SCALES[metric]['caption']}")
 
     # --- Tabela de incidentes -------------------------------------------
     st.subheader("🚨 Registro de quedas e instabilidades")
