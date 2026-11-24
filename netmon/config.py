@@ -33,8 +33,10 @@ INSTABILITY_CLOSE_AFTER = 3
 SERVICE_OPEN_AFTER = 2        # 2 x 60s = 2 min fora do ar
 SERVICE_CLOSE_AFTER = 1
 ISP_DOWN_MIN_TARGETS = 7      # nº de DNS sem resposta para considerar "internet caiu"
-INSTABILITY_LOSS_PCT = 30     # perda média nos DNS que caracteriza instabilidade
-INSTABILITY_LATENCY_MS = 150  # latência mediana nos DNS que caracteriza instabilidade
+# Limites de instabilidade (mesma régua do mapa de calor: 10% / 100 ms = "péssimo").
+# Precisam durar INSTABILITY_OPEN_AFTER rodadas seguidas para virar incidente.
+INSTABILITY_LOSS_PCT = 10     # perda média nos DNS que caracteriza instabilidade
+INSTABILITY_LATENCY_MS = 100  # latência mediana nos DNS que caracteriza instabilidade
 MONITOR_GAP_S = 120           # lacuna mínima para registrar "monitor desligado"
 
 # --- Alvos -------------------------------------------------------------

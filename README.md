@@ -23,7 +23,7 @@ Cada problema vira um registro com início, fim, duração e **causa provável**
 | --- | --- |
 | 🏠 **Rede local** | O roteador (gateway) parou de responder → Wi-Fi, cabo ou roteador. |
 | 🌐 **Internet / Operadora** | O roteador responde, mas quase todos os DNS públicos não → problema da operadora. |
-| 〰️ **Instabilidade** | Internet no ar, mas com perda ≥ 30% ou latência ≥ 150 ms. |
+| 〰️ **Instabilidade** | Internet no ar, mas com perda média ≥ 10% ou latência mediana ≥ 100 ms por 15s seguidos. |
 | 🧩 **Serviço fora do ar** | Internet ok, mas um site específico falhou por 2 checagens seguidas. |
 | 💤 **Monitor desligado** | Período sem dados (PC desligado ou monitor fechado). |
 

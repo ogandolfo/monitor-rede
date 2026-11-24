@@ -121,16 +121,15 @@ PALETTE = [
 
 WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
-# Escalas FIXAS do mapa de calor (verde = ótimo, vermelho = ruim), com faixas de
-# referência para internet residencial — não dependem dos dados do período.
-# Latência até os DNS públicos: em fibra, 5–20 ms é o normal; acima de ~100 ms
-# chamadas e jogos já sofrem. Acima de 150 ms fica tudo vermelho.
+# Escalas FIXAS do mapa de calor (verde = ótimo, vermelho = ruim) — não dependem
+# dos dados do período. Calibradas para uso exigente (jogos online, VPN, Teams, SSH)
+# numa fibra cujo normal é 8–12 ms até os DNS públicos.
 HEAT_COLORS = ["#1a9850", "#91cf60", "#fee08b", "#fc8d59", "#d73027"]
 HEAT_SCALES = {
-    "Latência (ms)": {"stops": [0, 20, 50, 100, 150],
-                      "caption": "🟢 até 20 ms ótimo · 🟡 ~50 ms aceitável · 🟠 ~100 ms ruim · 🔴 150 ms ou mais péssimo"},
-    "Perda (%)": {"stops": [0, 1, 3, 10, 25],
-                  "caption": "🟢 0% ideal · 🟡 ~3% já atrapalha chamadas · 🟠 ~10% ruim · 🔴 25% ou mais péssimo"},
+    "Latência (ms)": {"stops": [0, 20, 40, 70, 100],
+                      "caption": "🟢 até 20 ms ótimo · 🟡 ~40 ms aceitável · 🟠 ~70 ms ruim · 🔴 100 ms ou mais péssimo"},
+    "Perda (%)": {"stops": [0, 0.5, 2, 5, 10],
+                  "caption": "🟢 0% ideal · 🟡 ~2% já se nota em jogos e chamadas · 🟠 ~5% ruim · 🔴 10% ou mais péssimo"},
 }
 
 
